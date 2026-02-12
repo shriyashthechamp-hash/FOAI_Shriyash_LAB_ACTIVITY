@@ -1,75 +1,131 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useScroll, useTransform, useMotionValueEvent } from "framer-motion";
+import { useScroll, useMotionValueEvent } from "framer-motion";
 
 const FRAME_COUNT = 181;
 const IMAGES_DIR = "/images/huracan-sequence/ezgif-frame-";
 
 export default function HuracanCanvas() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const [images, setImages] = useState<HTMLImageElement[]>([]);
+    // Store images in a ref to avoid re-renders
+    const imagesRef = useRef<HTMLImageElement[]>([]);
     const [loaded, setLoaded] = useState(false);
+    const [loadingProgress, setLoadingProgress] = useState(0);
+
     const { scrollYProgress } = useScroll();
 
-    // Preload images
+    // Physics state for smooth scrolling
+    const scrollState = useRef({
+        current: 0,
+        target: 0,
+        lastFrame: -1
+    });
+
+    // 1. PRELOAD ALL FRAMES
     useEffect(() => {
+        let isMounted = true;
         const loadImages = async () => {
             const loadedImages: HTMLImageElement[] = [];
-            const imagePromises: Promise<void>[] = [];
+            let loadedCount = 0;
 
-            for (let i = 1; i <= FRAME_COUNT; i++) {
-                const promise = new Promise<void>((resolve, reject) => {
+            const promises = Array.from({ length: FRAME_COUNT }, (_, i) => {
+                return new Promise<void>((resolve) => {
                     const img = new Image();
-                    // Pad standard numbering: 001, 002, ... 181
-                    const frameNumber = i.toString().padStart(3, "0");
+                    const frameNumber = (i + 1).toString().padStart(3, "0");
                     img.src = `${IMAGES_DIR}${frameNumber}.jpg`;
+
                     img.onload = () => {
-                        loadedImages[i - 1] = img; // store at correct index
+                        if (!isMounted) return;
+                        loadedImages[i] = img;
+                        loadedCount++;
+                        setLoadingProgress(Math.round((loadedCount / FRAME_COUNT) * 100));
                         resolve();
                     };
-                    img.onerror = (e) => {
-                        console.error(`Failed to load frame ${i}`, e);
-                        // Even if fail, resolve to not block everything (or handle better in prod)
-                        resolve();
+
+                    img.onerror = () => {
+                        console.error(`Failed frame ${i + 1}`);
+                        resolve(); // Resolve anyway to continue
                     };
                 });
-                imagePromises.push(promise);
-            }
+            });
 
-            await Promise.all(imagePromises);
-            setImages(loadedImages);
-            setLoaded(true);
+            await Promise.all(promises);
+
+            if (isMounted) {
+                imagesRef.current = loadedImages;
+                setLoaded(true);
+            }
         };
 
         loadImages();
+        return () => { isMounted = false; };
     }, []);
 
-    // Draw frame
-    const renderFrame = (index: number) => {
-        const canvas = canvasRef.current;
-        if (!canvas || !images[index]) return;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const img = images[index];
-
-        // High DPI scaling
+    // 2. RETINA / 4K CANVAS SETUP
+    const setupCanvas = (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) => {
         const dpr = window.devicePixelRatio || 1;
-        canvas.width = window.innerWidth * dpr;
-        canvas.height = window.innerHeight * dpr;
+        const rect = canvas.getBoundingClientRect();
+
+        // Set actual size in memory (scaled to account for extra pixel density)
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+
+        // Normalize coordinate system to use css pixels
         ctx.scale(dpr, dpr);
 
-        // Image Contain/Cover Logic
-        const canvasWidth = window.innerWidth;
-        const canvasHeight = window.innerHeight;
+        // 5. IMAGE QUALITY SETTINGS
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+
+        return { width: rect.width, height: rect.height };
+    };
+
+    // Render a specific frame
+    const renderFrame = (frameIndex: number) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        const ctx = canvas.getContext("2d", { alpha: false }); // Optimize for no transparency
+        if (!ctx) return;
+
+        const img = imagesRef.current[frameIndex];
+        if (!img) return;
+
+        // We re-setup canvas dimensions only if needed, but for now let's assume valid state.
+        // To be perfectly safe on resize, we usually handle that in a ResizeObserver.
+        // For this engine, let's grab dimensions from the computed style style or cached rect.
+        // Re-calculating dpr here to ensure sharpness on window drag.
+
+        const dpr = window.devicePixelRatio || 1;
+
+        // Only resize if dimensions changed to avoid clearing canvas unnecessarily? 
+        // Actually, we must clear or draw over.
+        // Let's rely on the RequestAnimationFrame loop to manage dimensions if we want responsive.
+        // But constantly setting width/height clears canvas. 
+        // Best practice: Check if internal size matches display size.
+
+        const rect = canvas.getBoundingClientRect();
+        const neededWidth = rect.width * dpr;
+        const neededHeight = rect.height * dpr;
+
+        if (canvas.width !== neededWidth || canvas.height !== neededHeight) {
+            canvas.width = neededWidth;
+            canvas.height = neededHeight;
+            ctx.scale(dpr, dpr);
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+        }
+
+        const canvasWidth = rect.width;
+        const canvasHeight = rect.height;
+
+        // Helper to simulate "object-fit: cover"
         const imgRatio = img.width / img.height;
         const canvasRatio = canvasWidth / canvasHeight;
 
         let renderWidth, renderHeight, offsetX, offsetY;
 
-        // "Cover" effect
         if (canvasRatio > imgRatio) {
             renderWidth = canvasWidth;
             renderHeight = canvasWidth / imgRatio;
@@ -82,47 +138,79 @@ export default function HuracanCanvas() {
             offsetY = 0;
         }
 
-        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         ctx.drawImage(img, offsetX, offsetY, renderWidth, renderHeight);
     };
 
-    // Initial render when loaded
-    useEffect(() => {
-        if (loaded && images.length > 0) {
-            // Draw first frame immediately
-            requestAnimationFrame(() => renderFrame(0));
-        }
-    }, [loaded, images]);
-
-    // Update on scroll
+    // Update target based on scroll
     useMotionValueEvent(scrollYProgress, "change", (latest) => {
-        if (!loaded || images.length === 0) return;
-
-        // Map 0-1 progress to 0-(FRAME_COUNT-1)
-        const frameIndex = Math.min(
-            FRAME_COUNT - 1,
-            Math.floor(latest * FRAME_COUNT)
-        );
-
-        requestAnimationFrame(() => renderFrame(frameIndex));
+        scrollState.current.target = latest;
     });
+
+    // 3 & 4. SMOOTH SCROLL LOOP via RequestAnimationFrame
+    useEffect(() => {
+        if (!loaded) return;
+
+        let animationFrameId: number;
+
+        const loop = () => {
+            // 3. LERP SMOOTHING
+            // smooth = smooth + (target - smooth) * 0.08
+            const state = scrollState.current;
+            const diff = state.target - state.current;
+            const delta = diff * 0.08; // Ease factor
+
+            state.current += delta;
+
+            // 4. DRAW ONLY WHEN FRAME CHANGES substantially
+            // Map 0-1 to 0-(totalFrames-1)
+            const frameIndex = Math.min(
+                FRAME_COUNT - 1,
+                Math.max(0, Math.round(state.current * (FRAME_COUNT - 1)))
+            );
+
+            // Only draw if frame changed OR if we are getting close to target (refinement)
+            // Actually, checking exact frame index is best for performance.
+            if (frameIndex !== state.lastFrame) {
+                renderFrame(frameIndex);
+                state.lastFrame = frameIndex;
+            }
+
+            // Continue loop
+            animationFrameId = requestAnimationFrame(loop);
+        };
+
+        // Kick off loop
+        animationFrameId = requestAnimationFrame(loop);
+
+        return () => cancelAnimationFrame(animationFrameId);
+    }, [loaded]);
 
     return (
         <div className="fixed top-0 left-0 w-full h-full z-0 bg-black">
             {!loaded && (
-                <div className="absolute inset-0 flex items-center justify-center z-10">
-                    <div className="flex flex-col items-center gap-4">
-                        <div className="w-16 h-16 border-2 border-lambo-carbon border-t-lambo-gold rounded-full animate-spin"></div>
-                        <p className="font-rajdhani text-lambo-gold tracking-widest text-sm animate-pulse">INITIALIZING SYSTEMS</p>
+                <div className="absolute inset-0 flex items-center justify-center z-50 bg-black">
+                    <div className="flex flex-col items-center gap-6">
+                        <div className="relative w-64 h-1 bg-gray-900 rounded-full overflow-hidden">
+                            <div
+                                className="absolute top-0 left-0 h-full bg-gradient-to-r from-lambo-gold to-lambo-gold-bright transition-all duration-300 ease-out"
+                                style={{ width: `${loadingProgress}%` }}
+                            />
+                        </div>
+                        <div className="text-lambo-gold font-orbitron tracking-widest text-xs">
+                            INITIALIZING SYSTEMS... {loadingProgress}%
+                        </div>
                     </div>
                 </div>
             )}
+
             <canvas
                 ref={canvasRef}
-                className={`w-full h-full object-cover transition-opacity duration-1000 ${loaded ? "opacity-100" : "opacity-0"}`}
+                className={`w-full h-full object-cover transition-opacity duration-700 ${loaded ? "opacity-100" : "opacity-0"}`}
             />
-            {/* Cinematic Vignette */}
-            <div className="absolute inset-0 pointer-events-none bg-gradient-to-b from-black/80 via-transparent to-black/80 z-[1]" />
+
+            {/* Cinematic Gradients */}
+            <div className="absolute inset-0 pointer-events-none bg-gradient-to-b from-black/40 via-transparent to-black/80 z-[1]" />
+            <div className="absolute inset-0 pointer-events-none bg-gradient-to-r from-black/50 via-transparent to-black/50 z-[1]" />
         </div>
     );
 }
