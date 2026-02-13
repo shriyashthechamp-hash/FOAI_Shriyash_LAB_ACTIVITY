@@ -1,6 +1,4 @@
 "use client";
-export default function HuracanExperience({ scrollYProgress }: HuracanExperienceProps) {
-
 
 import { motion, useTransform, useSpring, MotionValue } from "framer-motion";
 import HuracanCanvas from "./HuracanCanvas";

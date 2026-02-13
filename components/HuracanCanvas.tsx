@@ -1,31 +1,21 @@
 "use client";
-import { MotionValue } from "framer-motion";
-
-type HuracanCanvasProps = {
-  scrollYProgress: MotionValue<number>;
-};
-
-export default function HuracanCanvas({ scrollYProgress }: HuracanCanvasProps) {
-  return (
-    <canvas />
-  );
-}
-
 
 import { useEffect, useRef, useState } from "react";
-import { useScroll, useMotionValueEvent } from "framer-motion";
+import { useMotionValueEvent, MotionValue } from "framer-motion";
 
 const FRAME_COUNT = 181;
 const IMAGES_DIR = "/images/huracan-sequence/ezgif-frame-";
 
-export default function HuracanCanvas() {
+interface HuracanCanvasProps {
+    scrollYProgress: MotionValue<number>;
+}
+
+export default function HuracanCanvas({ scrollYProgress }: HuracanCanvasProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     // Store images in a ref to avoid re-renders
     const imagesRef = useRef<HTMLImageElement[]>([]);
     const [loaded, setLoaded] = useState(false);
     const [loadingProgress, setLoadingProgress] = useState(0);
-
-    const { scrollYProgress } = useScroll();
 
     // Physics state for smooth scrolling
     const scrollState = useRef({
@@ -104,19 +94,7 @@ export default function HuracanCanvas() {
         const img = imagesRef.current[frameIndex];
         if (!img) return;
 
-        // We re-setup canvas dimensions only if needed, but for now let's assume valid state.
-        // To be perfectly safe on resize, we usually handle that in a ResizeObserver.
-        // For this engine, let's grab dimensions from the computed style style or cached rect.
-        // Re-calculating dpr here to ensure sharpness on window drag.
-
         const dpr = window.devicePixelRatio || 1;
-
-        // Only resize if dimensions changed to avoid clearing canvas unnecessarily? 
-        // Actually, we must clear or draw over.
-        // Let's rely on the RequestAnimationFrame loop to manage dimensions if we want responsive.
-        // But constantly setting width/height clears canvas. 
-        // Best practice: Check if internal size matches display size.
-
         const rect = canvas.getBoundingClientRect();
         const neededWidth = rect.width * dpr;
         const neededHeight = rect.height * dpr;
@@ -181,7 +159,6 @@ export default function HuracanCanvas() {
             );
 
             // Only draw if frame changed OR if we are getting close to target (refinement)
-            // Actually, checking exact frame index is best for performance.
             if (frameIndex !== state.lastFrame) {
                 renderFrame(frameIndex);
                 state.lastFrame = frameIndex;
