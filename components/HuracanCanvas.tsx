@@ -1,4 +1,16 @@
 "use client";
+import { MotionValue } from "framer-motion";
+
+type HuracanCanvasProps = {
+  scrollYProgress: MotionValue<number>;
+};
+
+export default function HuracanCanvas({ scrollYProgress }: HuracanCanvasProps) {
+  return (
+    <canvas />
+  );
+}
+
 
 import { useEffect, useRef, useState } from "react";
 import { useScroll, useMotionValueEvent } from "framer-motion";
